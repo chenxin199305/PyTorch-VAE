@@ -1,6 +1,6 @@
 import torch
 import unittest
-from models import CVAE
+from vae.models import CVAE
 
 
 class TestCVAE(unittest.TestCase):

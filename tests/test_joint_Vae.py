@@ -1,6 +1,6 @@
 import torch
 import unittest
-from models import JointVAE
+from vae.models import JointVAE
 from torchsummary import summary
 
 

@@ -1,6 +1,6 @@
 import torch
 import unittest
-from models import GumbelVAE
+from vae.models import GumbelVAE
 from torchsummary import summary
 
 

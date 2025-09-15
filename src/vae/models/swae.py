@@ -1,26 +1,29 @@
 import torch
-from models import BaseVAE
+from vae.models import BaseVAE
 from torch import nn
 from torch.nn import functional as F
+from torch import distributions as dist
 from .types_ import *
 
 
-class WAE_MMD(BaseVAE):
+class SWAE(BaseVAE):
 
     def __init__(self,
                  in_channels: int,
                  latent_dim: int,
                  hidden_dims: List = None,
                  reg_weight: int = 100,
-                 kernel_type: str = 'imq',
-                 latent_var: float = 2.,
-                 **kwargs) -> None:
-        super(WAE_MMD, self).__init__()
+                 wasserstein_deg: float= 2.,
+                 num_projections: int = 50,
+                 projection_dist: str = 'normal',
+                    **kwargs) -> None:
+        super(SWAE, self).__init__()
 
         self.latent_dim = latent_dim
         self.reg_weight = reg_weight
-        self.kernel_type = kernel_type
-        self.z_var = latent_var
+        self.p = wasserstein_deg
+        self.num_projections = num_projections
+        self.proj_dist = projection_dist
 
         modules = []
         if hidden_dims is None:
@@ -115,93 +118,65 @@ class WAE_MMD(BaseVAE):
         bias_corr = batch_size *  (batch_size - 1)
         reg_weight = self.reg_weight / bias_corr
 
-        recons_loss =F.mse_loss(recons, input)
+        recons_loss_l2 = F.mse_loss(recons, input)
+        recons_loss_l1 = F.l1_loss(recons, input)
 
-        mmd_loss = self.compute_mmd(z, reg_weight)
+        swd_loss = self.compute_swd(z, self.p, reg_weight)
 
-        loss = recons_loss + mmd_loss
-        return {'loss': loss, 'Reconstruction_Loss':recons_loss, 'MMD': mmd_loss}
+        loss = recons_loss_l2 + recons_loss_l1 + swd_loss
+        return {'loss': loss, 'Reconstruction_Loss':(recons_loss_l2 + recons_loss_l1), 'SWD': swd_loss}
 
-    def compute_kernel(self,
-                       x1: Tensor,
-                       x2: Tensor) -> Tensor:
-        # Convert the tensors into row and column vectors
-        D = x1.size(1)
-        N = x1.size(0)
-
-        x1 = x1.unsqueeze(-2) # Make it into a column tensor
-        x2 = x2.unsqueeze(-3) # Make it into a row tensor
-
+    def get_random_projections(self, latent_dim: int, num_samples: int) -> Tensor:
         """
-        Usually the below lines are not required, especially in our case,
-        but this is useful when x1 and x2 have different sizes
-        along the 0th dimension.
-        """
-        x1 = x1.expand(N, N, D)
-        x2 = x2.expand(N, N, D)
+        Returns random samples from latent distribution's (Gaussian)
+        unit sphere for projecting the encoded samples and the
+        distribution samples.
 
-        if self.kernel_type == 'rbf':
-            result = self.compute_rbf(x1, x2)
-        elif self.kernel_type == 'imq':
-            result = self.compute_inv_mult_quad(x1, x2)
+        :param latent_dim: (Int) Dimensionality of the latent space (D)
+        :param num_samples: (Int) Number of samples required (S)
+        :return: Random projections from the latent unit sphere
+        """
+        if self.proj_dist == 'normal':
+            rand_samples = torch.randn(num_samples, latent_dim)
+        elif self.proj_dist == 'cauchy':
+            rand_samples = dist.Cauchy(torch.tensor([0.0]),
+                                       torch.tensor([1.0])).sample((num_samples, latent_dim)).squeeze()
         else:
-            raise ValueError('Undefined kernel type.')
+            raise ValueError('Unknown projection distribution.')
 
-        return result
+        rand_proj = rand_samples / rand_samples.norm(dim=1).view(-1,1)
+        return rand_proj # [S x D]
 
 
-    def compute_rbf(self,
-                    x1: Tensor,
-                    x2: Tensor,
-                    eps: float = 1e-7) -> Tensor:
+    def compute_swd(self,
+                    z: Tensor,
+                    p: float,
+                    reg_weight: float) -> Tensor:
         """
-        Computes the RBF Kernel between x1 and x2.
-        :param x1: (Tensor)
-        :param x2: (Tensor)
-        :param eps: (Float)
+        Computes the Sliced Wasserstein Distance (SWD) - which consists of
+        randomly projecting the encoded and prior vectors and computing
+        their Wasserstein distance along those projections.
+
+        :param z: Latent samples # [N  x D]
+        :param p: Value for the p^th Wasserstein distance
+        :param reg_weight:
         :return:
         """
-        z_dim = x2.size(-1)
-        sigma = 2. * z_dim * self.z_var
+        prior_z = torch.randn_like(z) # [N x D]
+        device = z.device
 
-        result = torch.exp(-((x1 - x2).pow(2).mean(-1) / sigma))
-        return result
+        proj_matrix = self.get_random_projections(self.latent_dim,
+                                                  num_samples=self.num_projections).transpose(0,1).to(device)
 
-    def compute_inv_mult_quad(self,
-                               x1: Tensor,
-                               x2: Tensor,
-                               eps: float = 1e-7) -> Tensor:
-        """
-        Computes the Inverse Multi-Quadratics Kernel between x1 and x2,
-        given by
+        latent_projections = z.matmul(proj_matrix) # [N x S]
+        prior_projections = prior_z.matmul(proj_matrix) # [N x S]
 
-                k(x_1, x_2) = \sum \frac{C}{C + \|x_1 - x_2 \|^2}
-        :param x1: (Tensor)
-        :param x2: (Tensor)
-        :param eps: (Float)
-        :return:
-        """
-        z_dim = x2.size(-1)
-        C = 2 * z_dim * self.z_var
-        kernel = C / (eps + C + (x1 - x2).pow(2).sum(dim = -1))
-
-        # Exclude diagonal elements
-        result = kernel.sum() - kernel.diag().sum()
-
-        return result
-
-    def compute_mmd(self, z: Tensor, reg_weight: float) -> Tensor:
-        # Sample from prior (Gaussian) distribution
-        prior_z = torch.randn_like(z)
-
-        prior_z__kernel = self.compute_kernel(prior_z, prior_z)
-        z__kernel = self.compute_kernel(z, z)
-        priorz_z__kernel = self.compute_kernel(prior_z, z)
-
-        mmd = reg_weight * prior_z__kernel.mean() + \
-              reg_weight * z__kernel.mean() - \
-              2 * reg_weight * priorz_z__kernel.mean()
-        return mmd
+        # The Wasserstein distance is computed by sorting the two projections
+        # across the batches and computing their element-wise l2 distance
+        w_dist = torch.sort(latent_projections.t(), dim=1)[0] - \
+                 torch.sort(prior_projections.t(), dim=1)[0]
+        w_dist = w_dist.pow(p)
+        return reg_weight * w_dist.mean()
 
     def sample(self,
                num_samples:int,

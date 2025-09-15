@@ -1,6 +1,6 @@
 import torch
 import unittest
-from models import FactorVAE
+from vae.models import FactorVAE
 from torchsummary import summary
 
 

@@ -1,6 +1,6 @@
 import torch
 import unittest
-from models import DFCVAE
+from vae.models import DFCVAE
 from torchsummary import summary
 
 
