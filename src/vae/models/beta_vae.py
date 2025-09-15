@@ -18,6 +18,19 @@ class BetaVAE(BaseVAE):
                  Capacity_max_iter: int = 1e5,
                  loss_type: str = 'B',
                  **kwargs) -> None:
+        """
+        Class for VAE model
+
+        :param in_channels: Number of input channels
+        :param latent_dim: Dimensionality of the latent space
+        :param hidden_dims: List of hidden dimensions
+        :param beta: Beta term for the KL divergence
+        :param gamma: Gamma term for the KL divergence
+        :param max_capacity: Maximum capacity C
+        :param Capacity_max_iter: Number of iterations to reach maximum capacity
+        :param loss_type: Type of loss to use ('H' or 'B')
+        :param kwargs: Additional arguments
+        """
         super(BetaVAE, self).__init__()
 
         self.latent_dim = latent_dim
@@ -27,6 +40,7 @@ class BetaVAE(BaseVAE):
         self.C_max = torch.Tensor([max_capacity])
         self.C_stop_iter = Capacity_max_iter
 
+        # Encoder Construction
         modules = []
         if hidden_dims is None:
             hidden_dims = [32, 64, 128, 256, 512]
@@ -35,14 +49,20 @@ class BetaVAE(BaseVAE):
         for h_dim in hidden_dims:
             modules.append(
                 nn.Sequential(
-                    nn.Conv2d(in_channels, out_channels=h_dim,
-                              kernel_size=3, stride=2, padding=1),
+                    nn.Conv2d(in_channels,
+                              out_channels=h_dim,
+                              kernel_size=3,
+                              stride=2,
+                              padding=1),
                     nn.BatchNorm2d(h_dim),
                     nn.LeakyReLU())
             )
             in_channels = h_dim
 
         self.encoder = nn.Sequential(*modules)
+
+        # Fully connected layers to map the flattened encoder output to
+        # the mean and log-variance of the latent distribution.
         self.fc_mu = nn.Linear(hidden_dims[-1] * 4, latent_dim)
         self.fc_var = nn.Linear(hidden_dims[-1] * 4, latent_dim)
 
