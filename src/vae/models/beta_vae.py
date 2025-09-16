@@ -49,7 +49,7 @@ class BetaVAE(BaseVAE):
         for h_dim in hidden_dims:
             modules.append(
                 nn.Sequential(
-                    nn.Conv2d(in_channels,
+                    nn.Conv2d(in_channels=in_channels,
                               out_channels=h_dim,
                               kernel_size=3,
                               stride=2,
@@ -69,6 +69,7 @@ class BetaVAE(BaseVAE):
         # Build Decoder
         modules = []
 
+        # The decoder starts with a linear layer to project the latent vector to the starting dimensions of the decoder.
         self.decoder_input = nn.Linear(latent_dim, hidden_dims[-1] * 4)
 
         hidden_dims.reverse()
@@ -76,8 +77,8 @@ class BetaVAE(BaseVAE):
         for i in range(len(hidden_dims) - 1):
             modules.append(
                 nn.Sequential(
-                    nn.ConvTranspose2d(hidden_dims[i],
-                                       hidden_dims[i + 1],
+                    nn.ConvTranspose2d(in_channels=hidden_dims[i],
+                                       out_channels=hidden_dims[i + 1],
                                        kernel_size=3,
                                        stride=2,
                                        padding=1,
@@ -88,18 +89,22 @@ class BetaVAE(BaseVAE):
 
         self.decoder = nn.Sequential(*modules)
 
+        # The final layer produces the output image with 3 channels and values in [-1, 1] (due to Tanh).
         self.final_layer = nn.Sequential(
-            nn.ConvTranspose2d(hidden_dims[-1],
-                               hidden_dims[-1],
+            nn.ConvTranspose2d(in_channels=hidden_dims[-1],
+                               out_channels=hidden_dims[-1],
                                kernel_size=3,
                                stride=2,
                                padding=1,
                                output_padding=1),
             nn.BatchNorm2d(hidden_dims[-1]),
             nn.LeakyReLU(),
-            nn.Conv2d(hidden_dims[-1], out_channels=3,
-                      kernel_size=3, padding=1),
-            nn.Tanh())
+            nn.Conv2d(in_channels=hidden_dims[-1],
+                      out_channels=in_channels,
+                      kernel_size=3,
+                      padding=1),
+            nn.Tanh()
+        )
 
     def encode(self, input: Tensor) -> List[Tensor]:
         """
@@ -146,26 +151,29 @@ class BetaVAE(BaseVAE):
                       *args,
                       **kwargs) -> dict:
         self.num_iter += 1
-        recons = args[0]
+
+        reconstruct = args[0]
         input = args[1]
         mu = args[2]
         log_var = args[3]
-        kld_weight = kwargs['M_N']  # Account for the minibatch samples from the dataset
 
-        recons_loss = F.mse_loss(recons, input)
+        # Account for the minibatch samples from the dataset
+        kld_weight = kwargs['M_N']
 
+        # Computes reconstruction loss (MSE) and KL divergence loss.
+        reconstruct_loss = F.mse_loss(reconstruct, input)
         kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim=1), dim=0)
 
         if self.loss_type == 'H':  # https://openreview.net/forum?id=Sy2fzU9gl
-            loss = recons_loss + self.beta * kld_weight * kld_loss
+            loss = reconstruct_loss + self.beta * kld_weight * kld_loss
         elif self.loss_type == 'B':  # https://arxiv.org/pdf/1804.03599.pdf
             self.C_max = self.C_max.to(input.device)
             C = torch.clamp(self.C_max / self.C_stop_iter * self.num_iter, 0, self.C_max.data[0])
-            loss = recons_loss + self.gamma * kld_weight * (kld_loss - C).abs()
+            loss = reconstruct_loss + self.gamma * kld_weight * (kld_loss - C).abs()
         else:
             raise ValueError('Undefined loss type.')
 
-        return {'loss': loss, 'Reconstruction_Loss': recons_loss, 'KLD': kld_loss}
+        return {'loss': loss, 'Reconstruction_Loss': reconstruct_loss, 'KLD': kld_loss}
 
     def sample(self,
                num_samples: int,
