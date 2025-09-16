@@ -7,16 +7,22 @@ from .types_ import *
 
 class VanillaVAE(BaseVAE):
 
-
     def __init__(self,
                  in_channels: int,
                  latent_dim: int,
                  hidden_dims: List = None,
                  **kwargs) -> None:
+        """
+        :param in_channels: Number of channels in the input
+        :param latent_dim: Dimensionality of the latent space
+        :param hidden_dims: List of hidden dimensions
+        :param kwargs: Additional arguments
+        """
         super(VanillaVAE, self).__init__()
 
         self.latent_dim = latent_dim
 
+        # Encoder Construction
         modules = []
         if hidden_dims is None:
             hidden_dims = [32, 64, 128, 256, 512]
@@ -25,21 +31,28 @@ class VanillaVAE(BaseVAE):
         for h_dim in hidden_dims:
             modules.append(
                 nn.Sequential(
-                    nn.Conv2d(in_channels, out_channels=h_dim,
-                              kernel_size= 3, stride= 2, padding  = 1),
+                    nn.Conv2d(in_channels=in_channels,
+                              out_channels=h_dim,
+                              kernel_size=3,
+                              stride=2,
+                              padding=1),
                     nn.BatchNorm2d(h_dim),
                     nn.LeakyReLU())
             )
             in_channels = h_dim
 
         self.encoder = nn.Sequential(*modules)
-        self.fc_mu = nn.Linear(hidden_dims[-1]*4, latent_dim)
-        self.fc_var = nn.Linear(hidden_dims[-1]*4, latent_dim)
 
+        # Fully connected layers to map the flattened encoder output to
+        # the mean and log-variance of the latent distribution.
+        self.fc_mu = nn.Linear(hidden_dims[-1] * 4, latent_dim)
+        self.fc_var = nn.Linear(hidden_dims[-1] * 4, latent_dim)
 
         # Build Decoder
         modules = []
 
+        # The decoder starts with a linear layer to project the latent vector
+        # to the starting dimensions of the decoder.
         self.decoder_input = nn.Linear(latent_dim, hidden_dims[-1] * 4)
 
         hidden_dims.reverse()
@@ -47,32 +60,32 @@ class VanillaVAE(BaseVAE):
         for i in range(len(hidden_dims) - 1):
             modules.append(
                 nn.Sequential(
-                    nn.ConvTranspose2d(hidden_dims[i],
-                                       hidden_dims[i + 1],
+                    nn.ConvTranspose2d(in_channels=hidden_dims[i],
+                                       out_channels=hidden_dims[i + 1],
                                        kernel_size=3,
-                                       stride = 2,
+                                       stride=2,
                                        padding=1,
                                        output_padding=1),
                     nn.BatchNorm2d(hidden_dims[i + 1]),
                     nn.LeakyReLU())
             )
 
-
-
         self.decoder = nn.Sequential(*modules)
 
         self.final_layer = nn.Sequential(
-                            nn.ConvTranspose2d(hidden_dims[-1],
-                                               hidden_dims[-1],
-                                               kernel_size=3,
-                                               stride=2,
-                                               padding=1,
-                                               output_padding=1),
-                            nn.BatchNorm2d(hidden_dims[-1]),
-                            nn.LeakyReLU(),
-                            nn.Conv2d(hidden_dims[-1], out_channels= 3,
-                                      kernel_size= 3, padding= 1),
-                            nn.Tanh())
+            nn.ConvTranspose2d(in_channels=hidden_dims[-1],
+                               out_channels=hidden_dims[-1],
+                               kernel_size=3,
+                               stride=2,
+                               padding=1,
+                               output_padding=1),
+            nn.BatchNorm2d(hidden_dims[-1]),
+            nn.LeakyReLU(),
+            nn.Conv2d(hidden_dims[-1],
+                      out_channels=in_channels,
+                      kernel_size=3,
+                      padding=1),
+            nn.Tanh())
 
     def encode(self, input: Tensor) -> List[Tensor]:
         """
@@ -119,7 +132,7 @@ class VanillaVAE(BaseVAE):
     def forward(self, input: Tensor, **kwargs) -> List[Tensor]:
         mu, log_var = self.encode(input)
         z = self.reparameterize(mu, log_var)
-        return  [self.decode(z), input, mu, log_var]
+        return [self.decode(z), input, mu, log_var]
 
     def loss_function(self,
                       *args,
@@ -131,22 +144,28 @@ class VanillaVAE(BaseVAE):
         :param kwargs:
         :return:
         """
-        recons = args[0]
+        reconstruct = args[0]
         input = args[1]
         mu = args[2]
         log_var = args[3]
 
-        kld_weight = kwargs['M_N'] # Account for the minibatch samples from the dataset
-        recons_loss =F.mse_loss(recons, input)
+        # Account for the minibatch samples from the dataset
+        kld_weight = kwargs['M_N']
 
+        # Computes reconstruction loss (MSE) and KL divergence loss.
+        reconstruct_loss = F.mse_loss(reconstruct, input)
+        kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim=1), dim=0)
 
-        kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
+        loss = reconstruct_loss + kld_weight * kld_loss
 
-        loss = recons_loss + kld_weight * kld_loss
-        return {'loss': loss, 'Reconstruction_Loss':recons_loss.detach(), 'KLD':-kld_loss.detach()}
+        return {
+            'loss': loss,
+            'Reconstruction_Loss': reconstruct_loss.detach(),
+            'KLD': -kld_loss.detach(),
+        }
 
     def sample(self,
-               num_samples:int,
+               num_samples: int,
                current_device: int, **kwargs) -> Tensor:
         """
         Samples from the latent space and return the corresponding
@@ -165,7 +184,7 @@ class VanillaVAE(BaseVAE):
 
     def generate(self, x: Tensor, **kwargs) -> Tensor:
         """
-        Given an input image x, returns the reconstructed image
+        Given an input image x, returns the reconstructtructed image
         :param x: (Tensor) [B x C x H x W]
         :return: (Tensor) [B x C x H x W]
         """

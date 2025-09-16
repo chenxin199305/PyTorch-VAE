@@ -77,7 +77,8 @@ class BetaVAE(BaseVAE):
         # Build Decoder
         modules = []
 
-        # The decoder starts with a linear layer to project the latent vector to the starting dimensions of the decoder.
+        # The decoder starts with a linear layer to project the latent vector
+        # to the starting dimensions of the decoder.
         self.decoder_input = nn.Linear(latent_dim, hidden_dims[-1] * 4)
 
         hidden_dims.reverse()
@@ -166,6 +167,12 @@ class BetaVAE(BaseVAE):
     def loss_function(self,
                       *args,
                       **kwargs) -> dict:
+        """
+        Computes the VAE loss function.
+        :param args:
+        :param kwargs:
+        :return:
+        """
         self.num_iter += 1
 
         reconstruct = args[0]
@@ -197,7 +204,11 @@ class BetaVAE(BaseVAE):
         else:
             raise ValueError('Undefined loss type.')
 
-        return {'loss': loss, 'Reconstruction_Loss': reconstruct_loss, 'KLD': kld_loss}
+        return {
+            'loss': loss,
+            'Reconstruction_Loss': reconstruct_loss,
+            'KLD': kld_loss,
+        }
 
     def sample(self,
                num_samples: int,
