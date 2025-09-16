@@ -63,6 +63,14 @@ class BetaVAE(BaseVAE):
 
         # Fully connected layers to map the flattened encoder output to
         # the mean and log-variance of the latent distribution.
+        """
+        hidden_dims[-1]：这是指编码器最后一个卷积层的输出通道数。
+        根据代码中的默认值 hidden_dims = [32, 64, 128, 256, 512]，所以 hidden_dims[-1] 就是 512。
+
+        * 4：这是因为在编码器的卷积部分，数据经历了多次下采样（stride=2）。
+        假设输入图像是 64x64，经过5层 stride=2 的卷积后，特征图的高度和宽度会变成 64 / 2^5 = 2。所以最终的特征图尺寸是 2x2。        
+        因此，展平（flatten）后的全连接层输入维度就是：通道数 * 高度 * 宽度 = 512 * 2 * 2 = 512 * 4 = 2048。
+        """
         self.fc_mu = nn.Linear(hidden_dims[-1] * 4, latent_dim)
         self.fc_var = nn.Linear(hidden_dims[-1] * 4, latent_dim)
 
@@ -119,6 +127,14 @@ class BetaVAE(BaseVAE):
         # Split the result into mu and var components
         # of the latent Gaussian distribution
         mu = self.fc_mu(result)
+
+        """
+        通常我们预测对数方差而不是直接预测方差，
+        是因为:
+            方差必须是正数，而直接预测方差可能会导致负值。
+            对数方差的取值范围是全体实数（$(-\infty, +\infty)$），
+        更容易用线性层来训练，且能确保计算出的方差永远是正数。
+        """
         log_var = self.fc_var(result)
 
         return [mu, log_var]
@@ -164,12 +180,20 @@ class BetaVAE(BaseVAE):
         reconstruct_loss = F.mse_loss(reconstruct, input)
         kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim=1), dim=0)
 
-        if self.loss_type == 'H':  # https://openreview.net/forum?id=Sy2fzU9gl
+        if self.loss_type == 'H':
+            # For loss type 'H', uses standard β-VAE loss.
+            # https://openreview.net/forum?id=Sy2fzU9gl
             loss = reconstruct_loss + self.beta * kld_weight * kld_loss
-        elif self.loss_type == 'B':  # https://arxiv.org/pdf/1804.03599.pdf
+
+        elif self.loss_type == 'B':
+            # For loss type 'B', uses a gradually increasing capacity C to control the KL divergence,
+            # encouraging it to approach C over time.
+            # https://arxiv.org/pdf/1804.03599.pdf
             self.C_max = self.C_max.to(input.device)
             C = torch.clamp(self.C_max / self.C_stop_iter * self.num_iter, 0, self.C_max.data[0])
+
             loss = reconstruct_loss + self.gamma * kld_weight * (kld_loss - C).abs()
+
         else:
             raise ValueError('Undefined loss type.')
 
